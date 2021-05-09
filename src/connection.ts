@@ -1,18 +1,18 @@
-import { Dictionary, isFunction } from 'lodash';
-import nodeCleanup from 'node-cleanup';
-import { AuthToken, Config, Driver, Session } from 'neo4j-driver/types';
-import * as neo4j from 'neo4j-driver';
-import { Transformer } from './transformer';
-import { Query } from './query';
-import { Builder } from './builder';
-import { Clause } from './clause';
-import { Observable } from 'rxjs';
+import { Dictionary, isFunction } from "lodash";
+import nodeCleanup from "node-cleanup";
+import { AuthToken, Config, Driver, Session } from "neo4j-driver/types";
+import * as neo4j from "neo4j-driver";
+import { Transformer } from "./transformer";
+import { Query } from "./query";
+import { Builder } from "./builder";
+import { Clause } from "./clause";
+import { Observable } from "rxjs";
 
 let connections: Connection[] = [];
 
 // Closes all open connections
 nodeCleanup(() => {
-  connections.forEach(con => con.close());
+  connections.forEach((con) => con.close());
   connections = [];
 });
 
@@ -24,6 +24,7 @@ export interface Observer<T> {
 }
 
 export type DriverConstructor = typeof neo4j.driver;
+export type SessionParameters = Parameters<Driver["session"]>[0];
 
 export interface FullConnectionOptions {
   driverConstructor: DriverConstructor;
@@ -32,10 +33,13 @@ export interface FullConnectionOptions {
 
 export type ConnectionOptions = Partial<FullConnectionOptions>;
 
-export interface Credentials { username: string; password: string; }
+export interface Credentials {
+  username: string;
+  password: string;
+}
 
 function isCredentials(credentials: any): credentials is Credentials {
-  return 'username' in credentials && 'password' in credentials;
+  return "username" in credentials && "password" in credentials;
 }
 
 // We have to correct the type of lodash's isFunction method because it doesn't correctly narrow
@@ -120,6 +124,7 @@ export class Connection extends Builder<Query> {
     protected url: string,
     auth: Credentials | AuthToken,
     options: DriverConstructor | ConnectionOptions = neo4j.driver,
+    protected sessionParameters: SessionParameters = {}
   ) {
     super();
 
@@ -127,12 +132,23 @@ export class Connection extends Builder<Query> {
       ? neo4j.auth.basic(auth.username, auth.password)
       : auth;
 
-    const driverConstructor = isTrueFunction(options) ? options
-      : options.driverConstructor ? options.driverConstructor : neo4j.driver;
-    const driverConfig = isTrueFunction(options) || !options.driverConfig
-      ? {} : options.driverConfig;
+    this.sessionParameters = sessionParameters;
+
+    const driverConstructor = isTrueFunction(options)
+      ? options
+      : options.driverConstructor
+      ? options.driverConstructor
+      : neo4j.driver;
+    const driverConfig =
+      isTrueFunction(options) || !options.driverConfig
+        ? {}
+        : options.driverConfig;
     this.options = { driverConstructor, driverConfig };
-    this.driver = driverConstructor(this.url, this.auth, this.options.driverConfig);
+    this.driver = driverConstructor(
+      this.url,
+      this.auth,
+      this.options.driverConfig
+    );
     this.open = true;
     connections.push(this);
   }
@@ -154,7 +170,7 @@ export class Connection extends Builder<Query> {
    */
   session(): Session | null {
     if (this.open) {
-      return this.driver.session();
+      return this.driver.session(this.sessionParameters);
     }
     return null;
   }
@@ -225,31 +241,30 @@ export class Connection extends Builder<Query> {
    */
   async run<R = any>(query: Query): Promise<Dictionary<R>[]> {
     if (!this.open) {
-      throw new Error('Cannot run query; connection is not open.');
+      throw new Error("Cannot run query; connection is not open.");
     }
 
     if (query.getClauses().length === 0) {
-      throw new Error('Cannot run query: no clauses attached to the query.');
+      throw new Error("Cannot run query: no clauses attached to the query.");
     }
 
     const session = this.session();
     if (!session) {
-      throw new Error('Cannot run query: connection is not open.');
+      throw new Error("Cannot run query: connection is not open.");
     }
 
     const queryObj = query.buildQueryObject();
 
-    return session.run(queryObj.query, queryObj.params)
-      .then(
-        async ({ records }) => {
-          await session.close();
-          return this.transformer.transformRecords<R>(records);
-        },
-        async (error) => {
-          await session.close();
-          throw error;
-        },
-      );
+    return session.run(queryObj.query, queryObj.params).then(
+      async ({ records }) => {
+        await session.close();
+        return this.transformer.transformRecords<R>(records);
+      },
+      async (error) => {
+        await session.close();
+        throw error;
+      }
+    );
   }
 
   /**
@@ -317,18 +332,24 @@ export class Connection extends Builder<Query> {
   stream<R = any>(query: Query): Observable<Dictionary<R>> {
     return new Observable((subscriber: Observer<Dictionary<R>>): void => {
       if (!this.open) {
-        subscriber.error(new Error('Cannot run query: connection is not open.'));
+        subscriber.error(
+          new Error("Cannot run query: connection is not open.")
+        );
         return;
       }
 
       if (query.getClauses().length === 0) {
-        subscriber.error(new Error('Cannot run query: no clauses attached to the query.'));
+        subscriber.error(
+          new Error("Cannot run query: no clauses attached to the query.")
+        );
         return;
       }
 
       const session = this.session();
       if (!session) {
-        subscriber.error(new Error('Cannot run query: connection is not open.'));
+        subscriber.error(
+          new Error("Cannot run query: connection is not open.")
+        );
         return;
       }
 
